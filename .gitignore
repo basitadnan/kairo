@@ -17,3 +17,8 @@ android/.idea/
 
 # Convex local state
 .convex/
+
+.vercel
+
+# Vercel project link metadata
+.vercel/

@@ -1,0 +1,191 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------------------
+   Soft Editorial design tokens
+   Source of truth: design-system/mega-schedule/MASTER.md
+--------------------------------------------------------------------------- */
+:root {
+  /* Surfaces */
+  --c-canvas: #f7f6f3;
+  --c-surface: #ffffff;
+  --c-surface-2: #faf9f6;
+
+  /* Hairlines */
+  --c-line: #e9e7e2;
+  --c-line-strong: #dcd9d1;
+
+  /* Ink (never pure black) */
+  --c-ink: #2a2a28;
+  --c-ink-2: #7a7874;
+  --c-ink-3: #a5a29b;
+
+  /* Muted sage accent */
+  --c-accent: #57653f;
+  --c-accent-strong: #46532f;
+  --c-accent-soft: #ebf0e3;
+  --c-accent-line: #d5dec6;
+  --c-on-accent: #fbfaf7;
+
+  /* Solid button (charcoal) */
+  --c-btn-bg: #26251f;
+  --c-btn-text: #fbfaf7;
+  --c-btn-hover: #38372f;
+
+  /* Pastel category palette: bg + deep readable text tone */
+  --chip-red-bg: #fdebec;      --chip-red-text: #9f2f2d;
+  --chip-blue-bg: #e1f3fe;     --chip-blue-text: #1f6c9f;
+  --chip-green-bg: #edf3ec;    --chip-green-text: #346538;
+  --chip-yellow-bg: #fbf3db;   --chip-yellow-text: #8a5c00;
+  --chip-lavender-bg: #efebfa; --chip-lavender-text: #65558f;
+  --chip-teal-bg: #e3f4f1;     --chip-teal-text: #1e655c;
+
+  /* Ultra-diffused warm shadows (< 0.06 alpha) */
+  --shadow-card: 0 1px 2px rgba(42, 40, 32, 0.03), 0 10px 28px -14px rgba(42, 40, 32, 0.07);
+  --shadow-card-hover: 0 2px 4px rgba(42, 40, 32, 0.04), 0 14px 36px -14px rgba(42, 40, 32, 0.09);
+  --shadow-pop: 0 4px 12px rgba(42, 40, 32, 0.05), 0 24px 56px -16px rgba(42, 40, 32, 0.14);
+}
+
+.dark {
+  --c-canvas: #131311;
+  --c-surface: #1b1a17;
+  --c-surface-2: #211f1b;
+
+  --c-line: #2c2b26;
+  --c-line-strong: #39372f;
+
+  --c-ink: #eceae3;
+  --c-ink-2: #9b9890;
+  --c-ink-3: #6e6b63;
+
+  --c-accent: #b3c79a;
+  --c-accent-strong: #cbddb4;
+  --c-accent-soft: rgba(151, 171, 118, 0.14);
+  --c-accent-line: rgba(151, 171, 118, 0.35);
+  --c-on-accent: #1b1a17;
+
+  /* Inverted charcoal button on dark surfaces */
+  --c-btn-bg: #eceae3;
+  --c-btn-text: #1b1a17;
+  --c-btn-hover: #fdfcf9;
+
+  --chip-red-bg: rgba(224, 122, 120, 0.16);       --chip-red-text: #f0b5b2;
+  --chip-blue-bg: rgba(96, 165, 213, 0.16);       --chip-blue-text: #a8d4f0;
+  --chip-green-bg: rgba(129, 168, 124, 0.16);     --chip-green-text: #bbd8b4;
+  --chip-yellow-bg: rgba(214, 164, 71, 0.18);     --chip-yellow-text: #ebcf9a;
+  --chip-lavender-bg: rgba(150, 132, 201, 0.16);  --chip-lavender-text: #cfc3ec;
+  --chip-teal-bg: rgba(78, 160, 148, 0.16);       --chip-teal-text: #a3dcd2;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.12), 0 10px 28px -14px rgba(0, 0, 0, 0.22);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.14), 0 14px 36px -14px rgba(0, 0, 0, 0.26);
+  --shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 56px -16px rgba(0, 0, 0, 0.4);
+}
+
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-ink-3: var(--c-ink-3);
+  --color-accent: var(--c-accent);
+  --color-accent-strong: var(--c-accent-strong);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-line: var(--c-accent-line);
+  --color-on-accent: var(--c-on-accent);
+  --color-btn: var(--c-btn-bg);
+  --color-btn-hover: var(--c-btn-hover);
+  --color-btn-text: var(--c-btn-text);
+
+  --color-chip-red-bg: var(--chip-red-bg);
+  --color-chip-red-text: var(--chip-red-text);
+  --color-chip-blue-bg: var(--chip-blue-bg);
+  --color-chip-blue-text: var(--chip-blue-text);
+  --color-chip-green-bg: var(--chip-green-bg);
+  --color-chip-green-text: var(--chip-green-text);
+  --color-chip-yellow-bg: var(--chip-yellow-bg);
+  --color-chip-yellow-text: var(--chip-yellow-text);
+  --color-chip-lavender-bg: var(--chip-lavender-bg);
+  --color-chip-lavender-text: var(--chip-lavender-text);
+  --color-chip-teal-bg: var(--chip-teal-bg);
+  --color-chip-teal-text: var(--chip-teal-text);
+
+  --font-sans: 'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Mono', monospace;
+  --font-serif: 'Newsreader Variable', Georgia, serif;
+
+  --radius-card: 14px;
+  --radius-btn: 10px;
+  --radius-input: 10px;
+
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+
+  --ease-editorial: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--c-canvas);
+    color: var(--c-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'ss01' on; /* Jakarta's alternate single-storey a */
+  }
+
+  ::selection {
+    background: var(--c-accent-line);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--c-accent);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--c-line-strong);
+    border-radius: 9999px;
+    border: 3px solid var(--c-canvas);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font-family: inherit;
+  }
+}
+
+@layer utilities {
+  /* Tabular numbers for times, dates and countdowns */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Motion is a garnish, never a requirement. MotionConfig covers the JS side;
+   this catches plain CSS transitions/animations and smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

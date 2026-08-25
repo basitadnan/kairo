@@ -1,0 +1,19 @@
+node_modules/
+dist/
+release/
+*.local
+.DS_Store
+npm-debug.log*
+
+# Capacitor / Android build artifacts (source stays tracked)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/public/
+android/.idea/
+*.keystore
+!debug.keystore
+
+# Convex local state
+.convex/

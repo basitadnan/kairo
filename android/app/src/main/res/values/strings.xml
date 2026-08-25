@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kairo</string>
+    <string name="title_activity_main">Kairo</string>
+    <string name="package_name">com.megaschedule.app</string>
+    <string name="custom_url_scheme">com.megaschedule.app</string>
+
+    <string name="widget_hint_first_run">Open Kairo once to load your day.</string>
+    <string name="widget_hint_no_classes">Nothing scheduled today.</string>
+    <string name="widget_hint_stale">Open Kairo to refresh.</string>
+</resources>

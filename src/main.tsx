@@ -1,7 +1,6 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { HashRouter } from 'react-router-dom'
-
 
 import '@fontsource-variable/plus-jakarta-sans'
 import '@fontsource-variable/jetbrains-mono'
@@ -9,23 +8,25 @@ import '@fontsource-variable/newsreader'
 import './styles/globals.css'
 
 import App from './App'
-import { AccessGate } from './screens/AccessGate'
-import { gateRequired, hasAccount, isUnlocked, readAccount, unlock } from './lib/access'
+import { AuthScreen } from './screens/AuthScreen'
+import { bootAuth, useAuth } from './lib/auth'
 import { startAutoSync } from './lib/sync'
 import { startNotificationEngine } from './lib/notifications'
 import { startWidgetSync } from './lib/widget'
 
-startAutoSync()
-startNotificationEngine()
-startWidgetSync()
+function Root() {
+  const phase = useAuth((s) => s.phase)
+  const [booted, setBooted] = useState(false)
 
-/** Hosted-web preview gate: native + local file runs open straight in. */
-function GatedRoot() {
-  const needsGate = gateRequired() && (!hasAccount() || !isUnlocked())
-  const [locked, setLocked] = useState(needsGate)
+  useEffect(() => {
+    void bootAuth().finally(() => setBooted(true))
+  }, [])
 
-  if (locked) {
-    return <AccessGate account={readAccount()} onUnlock={() => { unlock(); setLocked(false) }} />
+  if (!booted) {
+    return <div className="min-h-dvh bg-canvas" aria-busy="true" />
+  }
+  if (phase === 'gate') {
+    return <AuthScreen />
   }
   return (
     <HashRouter>
@@ -36,7 +37,17 @@ function GatedRoot() {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <GatedRoot />
+    <Root />
   </React.StrictMode>,
 )
 
+// Engines start after the auth decision: a claim-mode device still on the
+// gate shouldn't push its rows anywhere until the user has chosen what this
+// device's data belongs to.
+void Promise.resolve().then(startEngines)
+
+function startEngines() {
+  startAutoSync()
+  startNotificationEngine()
+  startWidgetSync()
+}

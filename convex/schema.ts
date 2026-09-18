@@ -4,11 +4,21 @@ import { v } from 'convex/values'
 /**
  * One flat document table mirrors Kairo's local-first design: every Dexie row
  * is stored verbatim as `data`, keyed by (owner, tableName, recordId).
- * `owner` is the SHA-256 of the user's pairing key — never the raw key.
+ * `owner` is the SHA-256 of the user's account key — never the password.
  */
 export default defineSchema({
+  users: defineTable({
+    username: v.string(), // lowercased, unique
+    displayName: v.string(),
+    credHash: v.string(), // sha256(accountKey) — the namespace owner
+    createdAt: v.number(),
+  })
+    .index('by_username', ['username'])
+    .index('by_cred', ['credHash']),
+
   syncKeys: defineTable({
-    // SHA-256 hex of the pairing key. The raw key only ever lives on devices.
+    // SHA-256 hex of a pairing key or derived account key. The raw secret
+    // only ever lives on devices.
     credHash: v.string(),
     createdAt: v.number(),
   }).index('by_cred', ['credHash']),

@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { getSetting, setSetting, db } from './db'
+import { sha256Hex } from './hash'
 import { api } from '../../convex/_generated/api'
 
 /**
@@ -10,17 +11,25 @@ import { api } from '../../convex/_generated/api'
  *   - Pairing key — a 32-byte random key; only its SHA-256 ever leaves the
  *     device. Whoever holds the raw key owns that cloud namespace.
  *
- * The URL is stored in the settings table like everything else. Replacing
- * supabase.ts: same responsibilities, no accounts — the key IS the identity.
+ * Accounts build on the same model: a signed-in device stores an account key
+ * (derived from the password on-device) under `auth.key`, which takes
+ * precedence over the legacy pairing key. The URL is stored in the settings
+ * table; a build-time env var is the fallback for fresh installs.
  */
 
 export const CLOUD_URL_KEY = 'cloud.url'
 export const CLOUD_KEY_KEY = 'cloud.key'
+export const AUTH_KEY_KEY = 'auth.key'
 
 let cached: { url: string; client: ConvexHttpClient } | null = null
 
+function defaultUrl(): string | null {
+  const url = import.meta.env.VITE_CONVEX_URL
+  return typeof url === 'string' && /^https:\/\/[a-z0-9-]+\.convex\.(cloud|site)/i.test(url) ? url : null
+}
+
 export async function getCloud(): Promise<ConvexHttpClient | null> {
-  const url = await getSetting(CLOUD_URL_KEY)
+  const url = (await getSetting(CLOUD_URL_KEY)) ?? defaultUrl()
   if (!url || !/^https:\/\/[a-z0-9-]+\.convex\.(cloud|site)/i.test(url.trim())) return null
   const clean = url.trim()
   if (cached && cached.url === clean) return cached.client
@@ -51,19 +60,13 @@ export async function getConnection(): Promise<{ url: string; key: string }> {
   return { url: url ?? '', key: key ?? '' }
 }
 
-async function sha256Hex(text: string): Promise<string> {
-  const bytes = new TextEncoder().encode(text)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-}
-
-/** Credential sent with every call — the hash of the local pairing key. */
+/** Credential sent with every call: account key first, legacy pairing key second. */
 export async function getCred(): Promise<string | null> {
+  const authKey = await getSetting(AUTH_KEY_KEY)
+  if (authKey) return sha256Hex(authKey)
   const { key } = await getConnection()
-  if (!key) return null
-  return sha256Hex(key)
+  if (key) return sha256Hex(key)
+  return null
 }
 
 /** Generate a fresh pairing key (32 bytes, url-safe). */

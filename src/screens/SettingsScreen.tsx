@@ -49,8 +49,12 @@ import {
 } from '../lib/cloud'
 import { api } from '../../convex/_generated/api'
 import { runSync } from '../lib/sync'
+import { signOut, returnToGate, useAuth } from '../lib/auth'
+import { exportBackupJson } from '../lib/backup'
 
 export function SettingsScreen() {
+  const authUser = useAuth((s) => s.user)
+  const authOffline = useAuth((s) => s.offline)
   const [cloudUrl, setCloudUrl] = useState('')
   const [pairingKey, setPairingKey] = useState('')
   const [hasRemoteKey, setHasRemoteKey] = useState<boolean | null>(null) // null = unknown (no URL yet)
@@ -181,16 +185,7 @@ export function SettingsScreen() {
   }
 
   async function exportJson() {
-    const dump = {
-      exportedAt: new Date().toISOString(),
-      courses: await db.courses.toArray(),
-      classSlots: await db.classSlots.toArray(),
-      exams: await db.exams.toArray(),
-      assignments: await db.assignments.toArray(),
-      personalItems: await db.personalItems.toArray(),
-      attendance: await db.attendance.toArray(),
-    }
-    downloadText('mega-schedule-backup.json', JSON.stringify(dump, null, 2), 'application/json')
+    await exportBackupJson()
   }
 
   async function restoreBackup(file: File) {
@@ -277,6 +272,61 @@ export function SettingsScreen() {
   return (
     <div className="flex flex-col gap-10">
       <PageHeader title="Settings" sub="Make it yours" />
+
+      {/* Account */}
+      {(authUser || authOffline) && (
+        <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}>
+          <SectionHeader
+            title="Account"
+            hint={authUser ? 'Your login unlocks your data on any device.' : 'Using Kairo without an account — data stays on this device.'}
+            action={authUser ? <SyncStatus /> : undefined}
+          />
+          <Card className="mt-3 flex items-center justify-between gap-4 px-5 py-4">
+            <div className="min-w-0">
+              {authUser ? (
+                <>
+                  <p className="truncate text-sm font-medium text-ink">{authUser.displayName}</p>
+                  <p className="mt-0.5 font-mono text-xs text-ink-2">@{authUser.username}</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-ink">No account on this device</p>
+                  <p className="mt-0.5 text-xs text-ink-2">Set one up to sync with your other devices.</p>
+                </>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {authOffline && (
+                <Button size="sm" onClick={() => void returnToGate()}>
+                  Set up account
+                </Button>
+              )}
+              {authUser && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    onClick={() => {
+                      if (confirm('Sign out? Your data stays on this device and stays in the cloud.')) void signOut(false)
+                    }}
+                  >
+                    <SignOut size={14} aria-hidden /> Sign out
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      if (confirm('Sign out AND erase all data from this device? The cloud copy in your account is not touched.')) void signOut(true)
+                    }}
+                  >
+                    <Trash size={14} aria-hidden /> Erase
+                  </Button>
+                </>
+              )}
+            </div>
+          </Card>
+        </motion.section>
+      )}
 
       {/* Appearance */}
       <motion.section
@@ -534,10 +584,21 @@ export function SettingsScreen() {
       >
         <SectionHeader
           title="Cloud sync"
-          hint="One pairing key owns your cloud — devices that know it stay in sync."
+          hint={
+            authUser
+              ? 'Signed in — your account is your key. The deployment URL below is all this section needs.'
+              : 'One pairing key owns your cloud — devices that know it stay in sync.'
+          }
           action={<SyncStatus />}
         />
         <Card className="mt-3 p-5">
+          {authUser ? (
+            <p className="text-xs leading-relaxed text-ink-2">
+              Credentials are handled by your account (Settings → Account). Only change the deployment URL if you host your own
+              Convex deployment.
+            </p>
+          ) : (
+            <>
           <form onSubmit={connect} className="flex flex-col gap-4">
             <Field label="Deployment URL" hint="Convex dashboard → your project → the .convex.cloud URL.">
               <Input value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value)} placeholder="https://your-project.convex.cloud" autoComplete="off" />
@@ -635,6 +696,8 @@ export function SettingsScreen() {
 
           {restoreMsg && (
             <p className="mt-4 text-xs text-accent">{restoreMsg}</p>
+          )}
+            </>
           )}
         </Card>
       </motion.section>

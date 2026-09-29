@@ -27,6 +27,8 @@ export interface Attendance extends BaseRecord {
   dateISO: string // yyyy-MM-dd
   status: AttendanceStatus
   note?: string
+  /** Set when the app marked the class itself (nobody answered the reminders). */
+  auto?: true
 }
 
 /** A recurring weekly meeting rule, e.g. "Marketing, Mon 10:30-12:00, room B4". */

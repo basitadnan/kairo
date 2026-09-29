@@ -12,15 +12,25 @@ import { IconButton } from '../components/ui/IconButton'
 import { SectionHeader } from '../components/ui/SectionHeader'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import { StatusButton, AttendanceMarkingRow } from '../components/attendance/AttendanceMarking'
+import { CatchUpList } from '../components/attendance/CatchUp'
 import {
   ATTENDANCE_META,
   ATTENDANCE_ORDER,
+  ATT_KEYS,
+  attendanceTarget,
+  catchUpStart,
+  insightFor,
   markAttendance,
   statsFor,
 } from '../lib/attendance'
 import { db, softDelete } from '../lib/db'
-import { todayISO } from '../lib/format'
+import { addDaysISO, todayISO } from '../lib/format'
 import type { ClassSlot } from '../lib/types'
+
+function safeSkipLabel(safe: number): string {
+  if (safe <= 0) return 'no slack left — the next absence breaks it'
+  return `you can miss ${safe} more ${safe === 1 ? 'class' : 'classes'}`
+}
 
 export function AttendanceScreen() {
   const { courses, slots, ready } = useCoreData()
@@ -28,17 +38,29 @@ export function AttendanceScreen() {
   const today = todayISO()
   const todayRecords = useAttendanceFor(today)
   const allRecords = useLiveQuery(() => db.attendance.toArray(), []) ?? []
+  const targetRow = useLiveQuery(() => db.settings.get(ATT_KEYS.target), [])
+  const sinceRow = useLiveQuery(() => db.settings.get(ATT_KEYS.since), [])
   const [openRow, setOpenRow] = useState<string | undefined>()
+
+  const target = attendanceTarget(targetRow?.value)
+  const catchUpFrom = catchUpStart(slots, sinceRow?.value)
+  const catchUpTo = addDaysISO(today, -1)
 
   const liveSlotsToday = slots.filter(
     (s: ClassSlot) => !s.deleted && s.dayOfWeek === new Date().getDay() && s.validFrom <= today && (!s.validTo || s.validTo >= today),
   )
   liveSlotsToday.sort((a, b) => a.startMin - b.startMin)
 
+  const markedToday = liveSlotsToday.filter((s) => todayRecords.some((r) => !r.deleted && r.slotId === s.id)).length
+
   const overall = statsFor(allRecords)
-  const perCourse = liveCourses
-    .map((c) => ({ course: c, stats: statsFor(allRecords, c.id) }))
-    .filter((x) => x.stats.totalMarked > 0)
+  const overallOnTrack = overall.percent != null && overall.percent >= target
+
+  // Worst first: the course that most needs your attention sits at the top.
+  const insights = liveCourses
+    .map((course) => ({ course, insight: insightFor(allRecords, course.id, target) }))
+    .filter((x) => x.insight.totalMarked > 0)
+    .sort((a, b) => (a.insight.percent ?? 101) - (b.insight.percent ?? 101))
 
   const history = allRecords
     .filter((r) => !r.deleted)
@@ -76,33 +98,61 @@ export function AttendanceScreen() {
             <EmptyState
               icon={CalendarCheck}
               title="No attendance yet"
-              body="Mark classes below or straight from Today — cancelled classes never count against you."
+              body="Mark classes below or straight from Today — cancelled classes never count against you. Fell behind? The catch-up list below takes them in bulk."
               className="py-6"
             />
           ) : (
-            <div className="flex items-center gap-5">
-              <span className="tnum font-mono text-[34px] leading-none text-ink">{overall.percent}%</span>
-              <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-                <div className="h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${overall.percent}%` }} />
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-5">
+                <span className="tnum font-mono text-[34px] leading-none text-ink">{overall.percent}%</span>
+                <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
+                  <div
+                    className={`h-full rounded-full transition-[width] duration-500 ${overallOnTrack ? 'bg-accent' : 'bg-chip-red-text'}`}
+                    style={{ width: `${overall.percent}%` }}
+                  />
+                </div>
               </div>
+              <p className="text-xs text-ink-2">
+                Target <span className="font-medium text-ink">{target}%</span> ·{' '}
+                {overallOnTrack ? safeSkipLabel(Math.max(0, Math.floor(overall.attended / (target / 100) - overall.totalMarked))) : 'below target, see insights below'}
+              </p>
             </div>
           )}
         </Card>
 
-        {perCourse.length > 0 && (
+        {insights.length > 0 && (
           <Card className="divide-y divide-line">
-            {perCourse.map(({ course, stats }) => (
+            {insights.map(({ course, insight }) => (
               <div key={course.id} className="flex items-center gap-4 px-5 py-3.5">
                 <span
                   className="h-3 w-3 shrink-0 rounded-full"
                   style={{ background: `var(--chip-${course.color}-bg)`, border: `1.5px solid var(--chip-${course.color}-text)` }}
                   aria-hidden
                 />
-                <p className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{course.name}</p>
-                <span className="shrink-0 font-mono text-xs text-ink-2">{stats.attended}/{stats.totalMarked}</span>
-                <span className="tnum w-[52px] shrink-0 text-right font-mono text-sm text-ink">
-                  {stats.percent != null ? `${stats.percent}%` : '—'}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <p className="truncate text-sm font-medium text-ink">{course.name}</p>
+                    <span className="shrink-0 font-mono text-[11px] text-ink-3">
+                      {insight.attended}/{insight.totalMarked}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                    <div
+                      className={`h-full rounded-full ${insight.onTrack ? 'bg-accent' : 'bg-chip-red-text'}`}
+                      style={{ width: `${insight.percent ?? 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="w-[104px] shrink-0 text-right">
+                  <p className="tnum font-mono text-sm text-ink">{insight.percent != null ? `${insight.percent}%` : '—'}</p>
+                  <p className="mt-0.5 text-[11px] leading-tight text-ink-2">
+                    {insight.onTrack
+                      ? insight.safeSkips > 0
+                        ? `can miss ${insight.safeSkips} more`
+                        : 'no slack left'
+                      : `attend ${insight.recoverIn} in a row`}
+                  </p>
+                </div>
               </div>
             ))}
           </Card>
@@ -116,7 +166,14 @@ export function AttendanceScreen() {
         transition={{ duration: 0.45, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
         className="flex flex-col gap-3"
       >
-        <SectionHeader title="Today" hint={`${liveSlotsToday.length} ${liveSlotsToday.length === 1 ? 'class' : 'classes'}`} />
+        <SectionHeader
+          title="Today"
+          hint={
+            liveSlotsToday.length === 0
+              ? 'No classes'
+              : `${markedToday}/${liveSlotsToday.length} marked`
+          }
+        />
         {liveSlotsToday.length === 0 ? (
           <Card>
             <EmptyState icon={CalendarCheck} title="Nothing scheduled" body="Enjoy the day off." className="py-6" />
@@ -128,6 +185,20 @@ export function AttendanceScreen() {
             ))}
           </Card>
         )}
+      </motion.section>
+
+      {/* Catch up — everything since the semester started that never got a mark */}
+      <motion.section
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+        className="flex flex-col gap-3"
+      >
+        <SectionHeader
+          title="Catch up"
+          hint={`Every class since ${format(new Date(`${catchUpFrom}T00:00:00`), 'd MMM')} without a mark.`}
+        />
+        <CatchUpList slots={slots} records={allRecords} courses={liveCourses} fromISO={catchUpFrom} toISO={catchUpTo} />
       </motion.section>
 
       {/* History */}
@@ -157,27 +228,39 @@ export function AttendanceScreen() {
                     <span className="min-w-0 flex-1 truncate text-sm text-ink">
                       {course?.name ?? (r.slotId ? 'Class' : 'Unknown course')}
                     </span>
+                    {r.auto && !isOpen && (
+                      <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-3" title="Recorded automatically">
+                        auto
+                      </span>
+                    )}
                     <Chip color={meta.chip}>{meta.label}</Chip>
                   </button>
                   {isOpen && (
-                    <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-2 px-5 py-2.5">
-                      <div className="flex flex-wrap gap-1.5">
-                        {ATTENDANCE_ORDER.map((status) => (
-                          <StatusButton
-                            key={status}
-                            status={status}
-                            active={r.status === status}
-                            onClick={() => void markAttendance({ courseId: r.courseId, slotId: r.slotId, dateISO: r.dateISO, status })}
-                          />
-                        ))}
+                    <div className="flex flex-col gap-2 border-t border-line bg-surface-2 px-5 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap gap-1.5">
+                          {ATTENDANCE_ORDER.map((status) => (
+                            <StatusButton
+                              key={status}
+                              status={status}
+                              active={r.status === status}
+                              onClick={() => void markAttendance({ courseId: r.courseId, slotId: r.slotId, dateISO: r.dateISO, status })}
+                            />
+                          ))}
+                        </div>
+                        <IconButton
+                          label="Delete record"
+                          onClick={() => void softDelete(db.attendance, r.id)}
+                          className="hover:text-chip-red-text"
+                        >
+                          <Trash size={14} aria-hidden />
+                        </IconButton>
                       </div>
-                      <IconButton
-                        label="Delete record"
-                        onClick={() => void softDelete(db.attendance, r.id)}
-                        className="hover:text-chip-red-text"
-                      >
-                        <Trash size={14} aria-hidden />
-                      </IconButton>
+                      {r.auto && (
+                        <p className="text-[11px] text-ink-2">
+                          Kairo recorded this one because the reminders went unanswered — tap <span className="font-medium text-ink">Present</span> if you were actually there.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

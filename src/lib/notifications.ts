@@ -1,7 +1,17 @@
 import { Capacitor } from '@capacitor/core'
+import { format } from 'date-fns'
 import { db, getSetting } from './db'
-import type { Assignment, ClassSlot, Exam } from './types'
+import type { Assignment, ClassSlot, Course, Exam } from './types'
 import { onLocalChange } from './bus'
+import { isoOf, todayISO } from './format'
+import {
+  autoAbsentKey,
+  getCatchUpStart,
+  markAutoAbsent,
+  occurrencesBetween,
+  unmarkedOccurrences,
+  type Occurrence,
+} from './attendance'
 
 /**
  * Reminder engine.
@@ -14,6 +24,10 @@ import { onLocalChange } from './bus'
  * scheduled notifications (exact alarms where permitted), so they survive the
  * app process being killed. Scheduled reminders are marked in the same dedupe
  * table so the foreground ticker never double-fires them.
+ *
+ * Attendance follow-ups ride the same machinery: a class that ends without a
+ * mark gets a short burst of escalating reminders, and if none of them land the
+ * engine records the absence itself (see `reconcileAttendance`).
  */
 
 export const NOTIF_KEYS = {
@@ -21,24 +35,61 @@ export const NOTIF_KEYS = {
   leadMin: 'notif.leadMin',
   tasks: 'notif.tasks',
   exams: 'notif.exams',
+  attendance: 'notif.attendance',
+  attendNags: 'notif.attendNags',
+  attendFirstMin: 'notif.attendFirstMin',
+  attendGapMin: 'notif.attendGapMin',
+  attendAutoAbsent: 'notif.attendAutoAbsent',
 } as const
 
-export async function getNotificationPrefs() {
-  const [classes, leadMin, tasks, exams] = await Promise.all([
+export const DEFAULT_ATTEND_NAGS = 5
+export const DEFAULT_ATTEND_FIRST_MIN = 5
+export const DEFAULT_ATTEND_GAP_MIN = 15
+
+export interface NotificationPrefs {
+  classes: boolean
+  leadMin: number
+  tasks: boolean
+  exams: boolean
+  attendance: boolean
+  attendNags: number
+  attendFirstMin: number
+  attendGapMin: number
+  autoAbsent: boolean
+}
+
+function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, Math.round(n)))
+}
+
+export async function getNotificationPrefs(): Promise<NotificationPrefs> {
+  const [classes, leadMin, tasks, exams, attendance, nags, first, gap, autoAbsent] = await Promise.all([
     getSetting(NOTIF_KEYS.classes),
     getSetting(NOTIF_KEYS.leadMin),
     getSetting(NOTIF_KEYS.tasks),
     getSetting(NOTIF_KEYS.exams),
+    getSetting(NOTIF_KEYS.attendance),
+    getSetting(NOTIF_KEYS.attendNags),
+    getSetting(NOTIF_KEYS.attendFirstMin),
+    getSetting(NOTIF_KEYS.attendGapMin),
+    getSetting(NOTIF_KEYS.attendAutoAbsent),
   ])
   return {
     classes: classes !== 'off', // default on
-    leadMin: Number(leadMin ?? 15),
+    leadMin: clampInt(leadMin, 15, 1, 240),
     tasks: tasks !== 'off',
     exams: exams !== 'off',
+    attendance: attendance !== 'off',
+    attendNags: clampInt(nags, DEFAULT_ATTEND_NAGS, 1, 8),
+    attendFirstMin: clampInt(first, DEFAULT_ATTEND_FIRST_MIN, 1, 120),
+    attendGapMin: clampInt(gap, DEFAULT_ATTEND_GAP_MIN, 5, 120),
+    autoAbsent: autoAbsent !== 'off',
   }
 }
 
-interface DueReminder {
+export interface DueReminder {
   key: string
   at: number // epoch ms when the reminder should fire
   title: string
@@ -52,11 +103,125 @@ function atDayMinute(dateISO: string, minuteOfDay: number): number {
   return new Date(`${dateISO}T00:00:00`).getTime() + minuteOfDay * 60_000
 }
 
-function isoOf(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+/* --------------------------- attendance follow-ups -------------------------- */
+
+/** How far back the engine will auto-record an absence (grace for a closed app). */
+const ATTENDANCE_LOOKBACK_DAYS = 3
+
+/** Dedupe key for the i-th follow-up of one class occurrence. */
+export function nagKey(occ: { slotId: string; dateISO: string }, i: number): string {
+  return `att:${occ.slotId}:${occ.dateISO.replaceAll('-', '')}:${i}`
+}
+
+function nagTitle(name: string, i: number, nags: number): string {
+  if (i === 0) return `Did you make ${name}?`
+  if (i === nags - 1) return `Last call — mark ${name}`
+  return `${name} is still unmarked`
+}
+
+function nagBody(occ: Occurrence, i: number, nags: number, gap: number): string {
+  if (i === 0) return `Class ended at ${pad(occ.endMin)}. Tap to mark it before it counts as absent.`
+  if (i === nags - 1) return `Mark it in the next ${gap} min or it will be recorded as absent.`
+  const left = nags - i - 1
+  return `${left} reminder${left === 1 ? '' : 's'} left before it counts as absent.`
+}
+
+/**
+ * Every follow-up reminder for classes that ended unmarked, inside the window
+ * [now − STALE_MS, windowEnd]. Reads its own prefs and data so the reminder
+ * schedule can be inspected (and tested) on its own.
+ */
+export async function attendanceFollowUps(now: number, windowEnd: number): Promise<DueReminder[]> {
+  const prefs = await getNotificationPrefs()
+  if (!prefs.attendance) return []
+  const [slots, records, courses] = await Promise.all([
+    db.classSlots.toArray(),
+    db.attendance.toArray(),
+    db.courses.toArray(),
+  ])
+  const courseName = (id?: string) => (courses as Course[]).find((c) => !c.deleted && c.id === id)?.name ?? 'Class'
+  const out: DueReminder[] = []
+  const fromISO = isoOf(new Date(now - ATTENDANCE_LOOKBACK_DAYS * 86_400_000))
+  const toISO = isoOf(new Date(Math.max(now, windowEnd) + 86_400_000))
+  const range = occurrencesBetween(slots, fromISO, toISO)
+  const { attendNags: nags, attendFirstMin: first, attendGapMin: gap } = prefs
+  for (const occ of unmarkedOccurrences(range, records)) {
+    const endMs = atDayMinute(occ.dateISO, occ.endMin)
+    for (let i = 0; i < nags; i++) {
+      const at = endMs + (first + i * gap) * 60_000
+      if (at < now - STALE_MS || at > windowEnd) continue
+      out.push({
+        key: nagKey(occ, i),
+        at,
+        title: nagTitle(courseName(occ.courseId), i, nags),
+        body: nagBody(occ, i, nags, gap),
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Record the absence the reminders kept warning about — but only once the final
+ * follow-up has actually fired on this device, so a week with the app closed
+ * can never silently rewrite history. Runs from the foreground ticker and on
+ * startup; absences are written with a deterministic id so two devices agree.
+ */
+export async function reconcileAttendance(): Promise<number> {
+  const prefs = await getNotificationPrefs()
+  if (!prefs.attendance || !prefs.autoAbsent) return 0
+  const now = Date.now()
+  const [slots, records, courses] = await Promise.all([
+    db.classSlots.toArray(),
+    db.attendance.toArray(),
+    db.courses.toArray(),
+  ])
+  const name = (id?: string) => (courses as Course[]).find((c) => !c.deleted && c.id === id)?.name ?? 'Class'
+  const fromISO = isoOf(new Date(now - ATTENDANCE_LOOKBACK_DAYS * 86_400_000))
+  const range = occurrencesBetween(slots, fromISO, isoOf(new Date(now)))
+  let marked = 0
+  for (const occ of unmarkedOccurrences(range, records)) {
+    const endMs = atDayMinute(occ.dateISO, occ.endMin)
+    const autoAt = endMs + (prefs.attendFirstMin + prefs.attendNags * prefs.attendGapMin) * 60_000
+    if (now < autoAt) continue
+    // Only punish the user if we actually nagged and were ignored.
+    if (!(await db.firedReminders.get(nagKey(occ, prefs.attendNags - 1)))) continue
+    if (await db.firedReminders.get(autoAbsentKey(occ))) continue
+    await markAutoAbsent(occ)
+    await db.firedReminders.put({ key: autoAbsentKey(occ), at: now })
+    await deliver(
+      `Marked absent: ${name(occ.courseId)}`,
+      `${occ.dateISO === todayISO() ? 'Today' : format(atDay(occ.dateISO), 'EEE d MMM')} · tap to correct it if you were there.`,
+    )
+    marked++
+  }
+  return marked
+}
+
+/**
+ * One gentle once-a-day heads-up about yesterday-and-before that never got
+ * marked. Classes from today are the follow-up reminders' job.
+ */
+async function nudgeUnmarkedBacklog(): Promise<void> {
+  const prefs = await getNotificationPrefs()
+  if (!prefs.attendance) return
+  const key = `att:catchup:${todayISO()}`
+  if (await db.firedReminders.get(key)) return
+  const [slots, records] = await Promise.all([db.classSlots.toArray(), db.attendance.toArray()])
+  const yesterday = isoOf(new Date(Date.now() - 86_400_000))
+  const start = await getCatchUpStart(slots)
+  if (start > yesterday) return
+  const pending = unmarkedOccurrences(occurrencesBetween(slots, start, yesterday), records)
+  if (pending.length === 0) return
+  await db.firedReminders.put({ key, at: Date.now() })
+  await deliver(
+    `${pending.length} ${pending.length === 1 ? 'class is' : 'classes are'} still unmarked`,
+    'Open Kairo → Attendance → Catch up to fill in the gaps.',
+  )
+}
+
+function atDay(dateISO: string): Date {
+  return new Date(`${dateISO}T00:00:00`)
 }
 
 /** Compute every reminder that exists within [now − STALE_MS, now + horizon], from live local data. */
@@ -110,6 +275,8 @@ async function computeWindow(now: number, horizonMs: number): Promise<DueReminde
       }
     }
   }
+
+  if (prefs.attendance) due.push(...(await attendanceFollowUps(now, windowEnd)))
 
   if (prefs.exams) {
     for (const exam of exams as Exam[]) {
@@ -226,7 +393,14 @@ async function deliver(title: string, body: string): Promise<void> {
     const granted = await requestNotificationPermission()
     if (!granted) return
   }
-  if (Notification.permission === 'granted') new Notification(title, { body, silent: false })
+  if (Notification.permission === 'granted') {
+    const n = new Notification(title, { body, silent: false })
+    // Clicking a reminder should land you in the app, not just dismiss it.
+    n.onclick = () => {
+      window.focus()
+      n.close()
+    }
+  }
 }
 
 /* ------------------------- Android forward scheduling ----------------------- */
@@ -327,6 +501,8 @@ export function startNotificationEngine() {
         await db.firedReminders.put({ key: r.key, at: r.at })
         await deliver(r.title, r.body)
       }
+      await nudgeUnmarkedBacklog()
+      await reconcileAttendance()
     } catch (err) {
       console.warn('[notifications]', err)
     }

@@ -1,8 +1,12 @@
+import { useMemo } from 'react'
 import { format } from 'date-fns'
 import { motion } from 'motion/react'
-import { ArrowRight, CalendarBlank, Leaf, ListChecks } from '@phosphor-icons/react'
+import { ArrowRight, CalendarBlank, Leaf, ListChecks, WarningCircle } from '@phosphor-icons/react'
 import { Link } from 'react-router-dom'
+import { useLiveQuery } from 'dexie-react-hooks'
 import { useCoreData, activeCourses, courseOf, useAttendanceFor } from '../lib/core-data'
+import { db } from '../lib/db'
+import { ATT_KEYS, catchUpStart, occurrencesBetween, unmarkedOccurrences } from '../lib/attendance'
 import { greeting, minutesToLabel, relativeDue, todayISO } from '../lib/format'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -25,6 +29,17 @@ export function DashboardScreen() {
   const today = todayISO()
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes()
   const todayAttendance = useAttendanceFor(today)
+  const savedSince = useLiveQuery(() => db.settings.get(ATT_KEYS.since), [])
+  const allAttendance = useLiveQuery(() => db.attendance.toArray(), [])
+
+  // Classes that came and went without a mark — today's finished ones included.
+  const pendingCatchUp = useMemo(() => {
+    if (!allAttendance) return []
+    const from = catchUpStart(slots, savedSince?.value)
+    return unmarkedOccurrences(occurrencesBetween(slots, from, today), allAttendance).filter(
+      (occ) => occ.dateISO < today || occ.endMin <= nowMin,
+    )
+  }, [slots, allAttendance, savedSince?.value, today, nowMin])
 
   const todaySlots = slots
     .filter((s) => !s.deleted && s.dayOfWeek === new Date().getDay() && s.validFrom <= today && (!s.validTo || s.validTo >= today))
@@ -109,6 +124,28 @@ export function DashboardScreen() {
         </motion.div>
       ) : (
         <>
+          {/* Catch-up nudge */}
+          {pendingCatchUp.length > 0 && (
+            <motion.section {...rise} transition={{ duration: 0.45, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}>
+              <Link to="/attendance" className="block">
+                <Card interactive className="flex items-center gap-4 p-5">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-chip-yellow-bg">
+                    <WarningCircle size={19} weight="regular" className="text-chip-yellow-text" aria-hidden />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold tracking-tight text-ink">
+                      {pendingCatchUp.length} {pendingCatchUp.length === 1 ? 'class still needs' : 'classes still need'} marking
+                    </p>
+                    <p className="mt-0.5 text-xs text-ink-2">
+                      Oldest {format(new Date(`${pendingCatchUp[0].dateISO}T00:00:00`), 'EEE d MMM')} · tap to catch up in seconds.
+                    </p>
+                  </div>
+                  <ArrowRight size={14} weight="bold" className="shrink-0 text-ink-3" aria-hidden />
+                </Card>
+              </Link>
+            </motion.section>
+          )}
+
           {/* Next up */}
           {nextUp && (
             <motion.section {...rise} transition={{ duration: 0.45, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}>

@@ -27,6 +27,9 @@ import { minutesToLabel } from '../lib/format'
 import { downloadText, toCsv } from '../lib/csv'
 import { DEFAULT_BANDS, loadBands, saveBands, type GradeBand } from '../lib/gpa'
 import {
+  DEFAULT_ATTEND_FIRST_MIN,
+  DEFAULT_ATTEND_GAP_MIN,
+  DEFAULT_ATTEND_NAGS,
   NOTIF_KEYS,
   exactAlarmStatus,
   getNotificationPrefs,
@@ -34,7 +37,16 @@ import {
   refreshScheduledNotifications,
   requestExactAlarm,
   sendTestNotification,
+  type NotificationPrefs,
 } from '../lib/notifications'
+import {
+  ATT_KEYS,
+  DEFAULT_ATTENDANCE_TARGET,
+  catchUpStart,
+  getAttendanceTarget,
+  setAttendanceTarget,
+} from '../lib/attendance'
+import { useCoreData } from '../lib/core-data'
 import { AI_SETTINGS, PROVIDERS, getProvider } from '../lib/ai'
 import {
   CLOUD_URL_KEY,
@@ -60,7 +72,21 @@ export function SettingsScreen() {
   const [hasRemoteKey, setHasRemoteKey] = useState<boolean | null>(null) // null = unknown (no URL yet)
   const [showKey, setShowKey] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [notif, setNotif] = useState({ classes: true, leadMin: 15, tasks: true, exams: true })
+  const [notif, setNotif] = useState<NotificationPrefs>({
+    classes: true,
+    leadMin: 15,
+    tasks: true,
+    exams: true,
+    attendance: true,
+    attendNags: DEFAULT_ATTEND_NAGS,
+    attendFirstMin: DEFAULT_ATTEND_FIRST_MIN,
+    attendGapMin: DEFAULT_ATTEND_GAP_MIN,
+    autoAbsent: true,
+  })
+  const [attTarget, setAttTarget] = useState(String(DEFAULT_ATTENDANCE_TARGET))
+  const [attSince, setAttSince] = useState('')
+  const [attSaved, setAttSaved] = useState(false)
+  const { slots } = useCoreData()
   const [perm, setPerm] = useState<string>('default')
   const [aiProviderId, setAiProviderId] = useState('mock')
   const [aiKey, setAiKey] = useState('')
@@ -90,6 +116,8 @@ export function SettingsScreen() {
         setHasRemoteKey(null)
       }
       setNotif(await getNotificationPrefs())
+      setAttTarget(String(await getAttendanceTarget()))
+      setAttSince((await getSetting(ATT_KEYS.since)) ?? '')
       setPerm(await notificationPermission())
       setAiProviderId((await getSetting(AI_SETTINGS.provider)) ?? 'mock')
       setAiKey((await getSetting(AI_SETTINGS.apiKey)) ?? '')
@@ -175,13 +203,36 @@ export function SettingsScreen() {
     }
   }
 
-  async function saveNotif(patch: Partial<typeof notif>) {
+  async function saveNotif(patch: Partial<NotificationPrefs>) {
     const next = { ...notif, ...patch }
     setNotif(next)
     await setSetting(NOTIF_KEYS.classes, next.classes ? 'on' : 'off')
     await setSetting(NOTIF_KEYS.leadMin, String(next.leadMin))
     await setSetting(NOTIF_KEYS.tasks, next.tasks ? 'on' : 'off')
     await setSetting(NOTIF_KEYS.exams, next.exams ? 'on' : 'off')
+    await setSetting(NOTIF_KEYS.attendance, next.attendance ? 'on' : 'off')
+    await setSetting(NOTIF_KEYS.attendNags, String(next.attendNags))
+    await setSetting(NOTIF_KEYS.attendFirstMin, String(next.attendFirstMin))
+    await setSetting(NOTIF_KEYS.attendGapMin, String(next.attendGapMin))
+    await setSetting(NOTIF_KEYS.attendAutoAbsent, next.autoAbsent ? 'on' : 'off')
+    // Android re-registers its scheduled follow-ups against the new settings.
+    void refreshScheduledNotifications()
+  }
+
+  async function saveAttTarget(value: string) {
+    setAttTarget(value)
+    await setAttendanceTarget(Number(value) || DEFAULT_ATTENDANCE_TARGET)
+    setAttSaved(true)
+    setTimeout(() => setAttSaved(false), 2000)
+  }
+
+  /** Empty means "let the timetable decide" (its earliest start date). */
+  async function saveAttSince(value: string) {
+    setAttSince(value)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) await setSetting(ATT_KEYS.since, value)
+    else await db.settings.delete(ATT_KEYS.since)
+    setAttSaved(true)
+    setTimeout(() => setAttSaved(false), 2000)
   }
 
   async function exportJson() {
@@ -445,6 +496,115 @@ export function SettingsScreen() {
             </ol>
           </Card>
         )}
+      </motion.section>
+
+      {/* Attendance follow-ups */}
+      <motion.section
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, delay: 0.06, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <SectionHeader title="Attendance" hint="Kairo keeps asking until every class is marked — then it stops asking and decides." />
+        <Card className="mt-3 divide-y divide-line">
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <div>
+              <p className="text-sm font-medium text-ink">Marking follow-ups</p>
+              <p className="mt-0.5 text-xs text-ink-2">After a class ends unmarked, reminders arrive until you answer.</p>
+            </div>
+            <Switch checked={notif.attendance} onChange={(v) => void saveNotif({ attendance: v })} label="Attendance follow-ups" />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <p className="text-sm text-ink">Reminders per class</p>
+            <div className="w-[110px]">
+              <Select
+                aria-label="Reminders per class"
+                value={String(notif.attendNags)}
+                onChange={(e) => void saveNotif({ attendNags: Number(e.target.value) })}
+                className="h-9 text-[13px]"
+              >
+                {[3, 4, 5, 6].map((n) => (
+                  <option key={n} value={n}>{n} times</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <div>
+              <p className="text-sm text-ink">First reminder after class</p>
+              <p className="mt-0.5 text-xs text-ink-2">Counted from the end of the class.</p>
+            </div>
+            <div className="w-[110px]">
+              <Select
+                aria-label="First reminder after class"
+                value={String(notif.attendFirstMin)}
+                onChange={(e) => void saveNotif({ attendFirstMin: Number(e.target.value) })}
+                className="h-9 text-[13px]"
+              >
+                {[5, 10, 15, 30].map((n) => (
+                  <option key={n} value={n}>{n} min</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <p className="text-sm text-ink">Then every</p>
+            <div className="w-[110px]">
+              <Select
+                aria-label="Gap between reminders"
+                value={String(notif.attendGapMin)}
+                onChange={(e) => void saveNotif({ attendGapMin: Number(e.target.value) })}
+                className="h-9 text-[13px]"
+              >
+                {[10, 15, 20, 30].map((n) => (
+                  <option key={n} value={n}>{n} min</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <div>
+              <p className="text-sm font-medium text-ink">Mark absent automatically</p>
+              <p className="mt-0.5 text-xs text-ink-2">
+                Only after every reminder went unanswered — and only for classes from the last 3 days. Corrections always win.
+              </p>
+            </div>
+            <Switch checked={notif.autoAbsent} onChange={(v) => void saveNotif({ autoAbsent: v })} label="Mark absent automatically" />
+          </div>
+        </Card>
+
+        <Card className="mt-3 p-5">
+          <div className="flex flex-col gap-4">
+            <Field
+              label="Count classes since"
+              htmlFor="att-since"
+              hint={`Where the catch-up list starts looking back. Empty uses your timetable — currently ${format(new Date(`${catchUpStart(slots)}T00:00:00`), 'd MMM yyyy')}.`}
+            >
+              <Input
+                id="att-since"
+                type="date"
+                value={attSince}
+                onChange={(e) => void saveAttSince(e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Attendance target (%)"
+              htmlFor="att-target"
+              hint="Courses below this show how many classes in a row it takes to climb back."
+            >
+              <Input
+                id="att-target"
+                type="number"
+                min={1}
+                max={100}
+                value={attTarget}
+                onChange={(e) => setAttTarget(e.target.value)}
+                onBlur={(e) => void saveAttTarget(e.target.value)}
+                className="w-[110px]"
+              />
+            </Field>
+            {attSaved && <p className="text-xs text-accent">Saved</p>}
+          </div>
+        </Card>
       </motion.section>
 
       {/* AI model */}

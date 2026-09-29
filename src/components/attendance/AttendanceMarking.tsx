@@ -45,15 +45,20 @@ export function AttendanceMarkingRow({
         )}
       </div>
       {started && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5 pl-[68px]">
-          {ATTENDANCE_ORDER.map((status) => (
-            <StatusButton
-              key={status}
-              status={status}
-              active={existing?.status === status}
-              onClick={() => void markAttendance({ courseId: slot.courseId, slotId: slot.id, dateISO, status })}
-            />
-          ))}
+        <div className="mt-2.5 pl-[68px]">
+          <div className="flex flex-wrap gap-1.5">
+            {ATTENDANCE_ORDER.map((status) => (
+              <StatusButton
+                key={status}
+                status={status}
+                active={existing?.status === status}
+                onClick={() => void markAttendance({ courseId: slot.courseId, slotId: slot.id, dateISO, status })}
+              />
+            ))}
+          </div>
+          {existing?.auto && (
+            <p className="mt-1.5 text-[11px] text-ink-2">Kairo recorded this one — tap Present if you were there.</p>
+          )}
         </div>
       )}
     </div>

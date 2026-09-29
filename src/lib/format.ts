@@ -16,6 +16,23 @@ export function todayISO(): string {
   return format(new Date(), 'yyyy-MM-dd')
 }
 
+/** Local-time ISO date (yyyy-MM-dd) for a Date. */
+export function isoOf(date: Date): string {
+  return format(date, 'yyyy-MM-dd')
+}
+
+/** Local midnight of an ISO date; the one true way this codebase parses dates. */
+export function dayOf(dateISO: string): Date {
+  return new Date(`${dateISO}T00:00:00`)
+}
+
+/** Shift an ISO date by whole days (calendar-safe). */
+export function addDaysISO(dateISO: string, days: number): string {
+  const d = dayOf(dateISO)
+  d.setDate(d.getDate() + days)
+  return isoOf(d)
+}
+
 export function daysUntil(dateISO: string): number {
   const target = new Date(`${dateISO}T00:00:00`)
   const now = new Date()
